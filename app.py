@@ -19,6 +19,54 @@ from src.data.cache import get_candles
 from src.utils.config_loader import load_config
 from src.utils.logger import setup_logger
 
+BUNDLED_DATA_DIR = Path(__file__).resolve().parent / "data" / "cache"
+
+
+def _load_bundled_or_fetch(
+    asset: str, interval: str, start_date: str, end_date: str, source: str,
+) -> pd.DataFrame:
+    """Load from bundled parquet files, filtering to requested date range."""
+    # Try exact match first
+    try:
+        df = get_candles(asset, interval, start_date, end_date, source=source)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+
+    # Try loading any bundled file that covers the requested range
+    if BUNDLED_DATA_DIR.exists():
+        prefix = "bn_" if source == "binance" else ""
+        for f in sorted(BUNDLED_DATA_DIR.glob(f"{prefix}{asset}_{interval}_*.parquet")):
+            try:
+                df = pd.read_parquet(f)
+                if df["timestamp"].dt.tz is None:
+                    df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+                # Filter to requested range
+                start_ts = pd.Timestamp(start_date, tz="UTC")
+                end_ts = pd.Timestamp(end_date, tz="UTC")
+                df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
+                if not df.empty:
+                    return df.reset_index(drop=True)
+            except Exception:
+                continue
+
+        # Try any file for this asset regardless of interval/source
+        for f in sorted(BUNDLED_DATA_DIR.glob(f"*{asset}*.parquet")):
+            try:
+                df = pd.read_parquet(f)
+                if df["timestamp"].dt.tz is None:
+                    df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
+                start_ts = pd.Timestamp(start_date, tz="UTC")
+                end_ts = pd.Timestamp(end_date, tz="UTC")
+                df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
+                if not df.empty:
+                    return df.reset_index(drop=True)
+            except Exception:
+                continue
+
+    return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -172,21 +220,22 @@ if run_btn:
     progress = st.progress(0, text="Loading candle data...")
 
     for i, asset in enumerate(assets):
-        progress.progress((i) / len(assets), text=f"Fetching {asset} from {data_source}...")
-        df = get_candles(
-            asset,
-            interval,
+        progress.progress((i) / len(assets), text=f"Loading {asset}...")
+
+        # Try bundled data first, then fetch
+        df = _load_bundled_or_fetch(
+            asset, interval,
             config["backtest"]["start_date"],
             config["backtest"]["end_date"],
-            source=source_key,
+            source_key,
         )
         if df.empty:
-            st.error(f"No data for {asset}. Try a more recent date range or larger interval.")
+            st.error(f"No data for {asset}. Try a different date range or interval.")
         else:
             candle_data[asset] = df
 
     if not candle_data:
-        st.error("No candle data loaded.")
+        st.error("No candle data loaded. Bundled data covers 2024-04-06 to 2026-04-06 (4h) and 2026-01-01 to 2026-04-05 (1m).")
         st.stop()
 
     progress.progress(0.8, text="Running backtest...")
