@@ -50,17 +50,28 @@ def calculate_sl_tp(
 ) -> tuple[float, float]:
     """Calculate stop-loss and take-profit prices.
 
+    Supports two modes via config["orders"]["sl_mode"]:
+      - "pct"    (default) — distances are entry × stop_loss_pct/100
+      - "points" — distances are absolute (stop_loss_pts in price units)
+
     Returns (sl, tp).
     """
-    sl_pct = config["orders"]["stop_loss_pct"] / 100
-    tp_pct = config["orders"]["take_profit_pct"] / 100
+    orders = config["orders"]
+    mode = orders.get("sl_mode", "pct")
+
+    if mode == "points":
+        sl_dist = float(orders.get("stop_loss_pts", 0))
+        tp_dist = float(orders.get("take_profit_pts", 0))
+    else:
+        sl_dist = entry_price * (orders["stop_loss_pct"] / 100)
+        tp_dist = entry_price * (orders["take_profit_pct"] / 100)
 
     if direction == "long":
-        sl = entry_price * (1 - sl_pct)
-        tp = entry_price * (1 + tp_pct)
+        sl = entry_price - sl_dist
+        tp = entry_price + tp_dist
     else:
-        sl = entry_price * (1 + sl_pct)
-        tp = entry_price * (1 - tp_pct)
+        sl = entry_price + sl_dist
+        tp = entry_price - tp_dist
 
     return sl, tp
 
