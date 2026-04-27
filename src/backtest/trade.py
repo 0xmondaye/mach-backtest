@@ -86,9 +86,43 @@ class Trade:
         self.pnl_usd = self.gross_pnl_usd - total_costs
 
     def update_trailing_stop(self, current_price: float, config: dict) -> None:
-        """Update trailing stop if conditions are met."""
+        """Update trailing stop if conditions are met.
+
+        Two modes via management.trail_mode:
+          - "pct" (default): trails current_price by trailing_distance_pct,
+            activates at trailing_start_pct profit. Optional trailing_step_pct
+            debounces small updates.
+          - "points": trails entry by ratcheted multiples of trailing_step_pts,
+            activates at trailing_start_pts profit. First activation puts SL
+            at entry (breakeven), then ratchets up step_pts at a time.
+        """
         mgmt = config["management"]
         if not mgmt["trailing_stop_enabled"]:
+            return
+
+        trail_mode = mgmt.get("trail_mode", "pct")
+
+        if trail_mode == "points":
+            start_pts = float(mgmt.get("trailing_start_pts", 0))
+            step_pts = float(mgmt.get("trailing_step_pts", 0))
+            if start_pts <= 0 or step_pts <= 0:
+                return
+            if self.direction == "long":
+                profit = current_price - self.entry_price
+                if profit < start_pts:
+                    return
+                ratchets = int((profit - start_pts) // step_pts)
+                new_sl = self.entry_price + ratchets * step_pts
+                if new_sl > self.sl:
+                    self.sl = new_sl
+            else:
+                profit = self.entry_price - current_price
+                if profit < start_pts:
+                    return
+                ratchets = int((profit - start_pts) // step_pts)
+                new_sl = self.entry_price - ratchets * step_pts
+                if self.sl == 0 or new_sl < self.sl:
+                    self.sl = new_sl
             return
 
         start_pct = mgmt["trailing_start_pct"] / 100
